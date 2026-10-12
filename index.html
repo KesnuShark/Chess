@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Предатель в космосе</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{margin:0;height:100%;background:#0d1018;color:#fff;font-family:system-ui,sans-serif;overflow:hidden;touch-action:none}
+canvas{display:block;width:100%;height:100%}
+#hud{position:fixed;top:0;left:0;right:0;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top))}
+#bar{height:10px;background:#222a3d;border-radius:6px;overflow:hidden}
+#fill{height:100%;width:0;background:#3ddc84;transition:width .3s}
+#info{font-size:13px;margin-top:6px;opacity:.85;display:flex;justify-content:space-between}
+.btn{position:fixed;bottom:max(24px,env(safe-area-inset-bottom));width:96px;height:96px;border-radius:50%;border:0;color:#fff;font-weight:700;font-size:14px;background:#3a4668;opacity:.35}
+.btn.on{opacity:1}
+#act{right:20px;background:#d93b3b}#act.task{background:#e0b030;color:#222}
+#rep{right:128px;width:76px;height:76px;background:#2f7de1}
+#joy{position:fixed;left:0;bottom:0;width:55%;height:50%}
+#stick{position:fixed;width:110px;height:110px;margin:-55px 0 0 -55px;border-radius:50%;border:2px solid #fff4;display:none}
+#knob{position:absolute;left:35px;top:35px;width:40px;height:40px;border-radius:50%;background:#fff6}
+#ov{position:fixed;inset:0;background:#0d1018ee;display:none;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;gap:10px}
+#ov h2{margin:0 0 6px}
+.v{width:min(300px,100%);padding:12px;border:0;border-radius:10px;background:#222a3d;color:#fff;font-size:16px;display:flex;align-items:center;gap:10px}
+.v i{width:18px;height:18px;border-radius:50%;display:inline-block}
+.v.sel{outline:2px solid #3ddc84}
+.go{padding:12px 28px;border:0;border-radius:10px;background:#3ddc84;color:#111;font-weight:700;font-size:16px}
+</style></head><body>
+<canvas id="cv"></canvas>
+<div id="hud"><div id="bar"><div id="fill"></div></div><div id="info"><span id="role"></span><span id="alive"></span></div></div>
+<div id="joy"></div><div id="stick"><div id="knob"></div></div>
+<button class="btn" id="rep">ОТЧЁТ</button><button class="btn" id="act">—</button>
+<div id="ov"></div>
+<script>
+const tg=window.Telegram&&Telegram.WebApp;if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#0d1018');tg.setBackgroundColor('#0d1018')}catch(e){}}
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),$=id=>document.getElementById(id);
+function rs(){const d=devicePixelRatio||1;cv.width=innerWidth*d;cv.height=innerHeight*d}rs();addEventListener('resize',rs);
+const W=1000,H=700,R=14,NEED=12;
+const WALLS=[[200,0,20,250],[200,350,20,350],[500,150,300,20],[500,450,20,250],[750,300,250,20]];
+const TASKS=[[100,100],[100,600],[350,350],[650,80],[650,600],[900,200]];
+const COLORS=['#e64545','#3b7bea','#35c26b','#f0d23c','#b05ae0'],NAMES=['Ты','Алекс','Мира','Дэн','Ли'];
+let P,bodies,done,prog,paused,over,pl,botT,keys={},jx=0,jy=0,doing=0,cd=0,last=performance.now();
+function hit(x,y){if(x<R||y<R||x>W-R||y>H-R)return true;return WALLS.some(w=>x>w[0]-R&&x<w[0]+w[2]+R&&y>w[1]-R&&y<w[1]+w[3]+R)}
+function spawn(i){return[60+i*30,330+(i%2)*40]}
+function start(){
+ const imp=Math.floor(Math.random()*5);const pimp=Math.random()<.4;const ii=pimp?0:1+Math.floor(Math.random()*4);
+ P=COLORS.map((c,i)=>{const s=spawn(i);return{x:s[0],y:s[1],c,n:NAMES[i],alive:true,imp:i==ii,bot:i>0,t:TASKS[Math.floor(Math.random()*6)],cd:15,wait:0}});
+ pl=P[0];bodies=[];done=new Set();prog=0;paused=false;over=false;botT=0;doing=0;cd=15;
+ $('ov').style.display='none';$('role').textContent=pl.imp?'Ты предатель: устраняй экипаж':'Ты экипаж: делай задания';
+ $('role').style.color=pl.imp?'#ff6b6b':'#8fe3a8';
+}
+function move(p,dx,dy,sp,dt){const nx=p.x+dx*sp*dt,ny=p.y+dy*sp*dt;if(!hit(nx,p.y))p.x=nx;if(!hit(p.x,ny))p.y=ny}
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function aliveList(){return P.filter(p=>p.alive)}
+function check(){
+ const a=aliveList(),im=a.filter(p=>p.imp).length,cr=a.length-im;
+ if(im==0)return end('Предатель найден! Экипаж победил',1);
+ if(prog>=NEED)return end('Все задания выполнены! Экипаж победил',!pl.imp?1:0);
+ if(cr<=im)return end('Предателей стало слишком много',pl.imp?1:0);
+ if(!pl.alive)return end('Тебя устранили',0);
+ return false}
+function end(t,crewWin){over=true;paused=true;
+ let win=crewWin;if(t.startsWith('Все')||t.startsWith('Предатель найден'))win=pl.imp?0:1;
+ if(t.startsWith('Предателей'))win=pl.imp?1:0;
+ const o=$('ov');o.style.display='flex';o.innerHTML=`<h2>${win?'Победа':'Поражение'}</h2><div>${t}</div><div style="opacity:.7">Предатель: <b style="color:${P.find(p=>p.imp).c}">${P.find(p=>p.imp).n}</b></div><button class="go" id="again">Играть снова</button>`;
+ $('again').onclick=start;return true}
+function kill(k,v){v.alive=false;bodies.push({x:v.x,y:v.y,c:v.c,by:k});k.cd=18;if(k==pl)cd=18;check()}
+function meeting(){
+ paused=true;const o=$('ov');o.style.display='flex';let pick=null;
+ const al=aliveList();
+ o.innerHTML='<h2>Экстренное собрание</h2><div style="opacity:.7">Кого исключить?</div>'+al.filter(p=>p!=pl).map(p=>`<button class="v" data-i="${P.indexOf(p)}"><i style="background:${p.c}"></i>${p.n}</button>`).join('')+'<button class="v" data-i="-1">Пропустить</button><button class="go" id="ok">Голосовать</button>';
+ o.querySelectorAll('.v').forEach(b=>b.onclick=()=>{o.querySelectorAll('.v').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');pick=+b.dataset.i});
+ const killer=bodies.length?bodies[bodies.length-1].by:null;
+ $('ok').onclick=()=>{if(pick===null)return;
+  const votes={};const add=i=>votes[i]=(votes[i]||0)+1;add(pick);
+  al.filter(p=>p.bot).forEach(b=>{const others=al.filter(q=>q!=b);let t;const r=Math.random();
+   if(b.imp)t=r<.5?-1:P.indexOf(others.filter(q=>!q.imp)[Math.floor(Math.random()*others.filter(q=>!q.imp).length)]);
+   else if(pl.imp&&r<.35)t=0;
+   else if(!pl.imp&&r<.4&&killer&&killer.alive)t=P.indexOf(killer);
+   else if(r<.6)t=-1;else t=P.indexOf(others[Math.floor(Math.random()*others.length)]);
+   add(t)});
+  let best=-1,max=0,tie=false;for(const k in votes){if(votes[k]>max){max=votes[k];best=+k;tie=false}else if(votes[k]==max)tie=true}
+  let msg;if(tie||best<0)msg='Никого не исключили';else{const e=P[best];e.alive=false;msg=`${e.n} исключён${e.imp?' — это был предатель!':' — он не был предателем'}`}
+  bodies=[];P.forEach((p,i)=>{const s=spawn(i);p.x=s[0];p.y=s[1];p.cd=15;p.wait=0});cd=15;
+  o.innerHTML=`<h2>Итог</h2><div>${msg}</div><button class="go" id="c">Продолжить</button>`;
+  $('c').onclick=()=>{if(check())return;o.style.display='none';paused=false};
+ }}
+function act(){
+ if(paused)return;
+ if(pl.imp){const t=P.filter(p=>p.alive&&p!=pl&&dist(p,pl)<55)[0];if(t&&cd<=0)kill(pl,t)}
+ else{const i=nearTask();if(i>=0)doing=1.2}}
+function nearTask(){for(let i=0;i<6;i++)if(!done.has(i)&&Math.hypot(TASKS[i][0]-pl.x,TASKS[i][1]-pl.y)<45)return i;return -1}
+$('act').onpointerdown=act;$('rep').onpointerdown=()=>{if(!paused&&bodies.some(b=>dist(b,pl)<70))meeting()};
+function update(dt){
+ let dx=jx,dy=jy;if(keys.a||keys.ArrowLeft)dx-=1;if(keys.d||keys.ArrowRight)dx+=1;if(keys.w||keys.ArrowUp)dy-=1;if(keys.s||keys.ArrowDown)dy+=1;
+ const l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l}
+ if(l>.1){doing=0;move(pl,dx,dy,130,dt)}
+ cd-=dt;
+ if(doing>0){if(nearTask()<0)doing=0;else{doing-=dt;if(doing<=0){done.add(nearTask());prog++;check()}}}
+ botT+=dt;if(botT>20){botT=0;if(P.some(p=>p.bot&&p.alive&&!p.imp)&&prog<NEED-1){prog+=aliveList().filter(p=>p.bot&&!p.imp).length>1?2:1;if(prog>NEED)prog=NEED;if(check())return}}
+ for(const b of P){if(!b.bot||!b.alive)continue;b.cd-=dt;
+  if(b.wait>0){b.wait-=dt}else{const dx=b.t[0]-b.x,dy=b.t[1]-b.y,d=Math.hypot(dx,dy);
+   if(d<14){b.wait=1+Math.random()*3;b.t=TASKS[Math.floor(Math.random()*6)]}else{
+    const ox=b.x,oy=b.y;move(b,dx/d,dy/d,70,dt);if(b.x==ox&&b.y==oy){b.t=TASKS[Math.floor(Math.random()*6)];b.wait=.3}}}
+  if(b.imp&&b.cd<=0){const v=P.find(p=>p.alive&&!p.imp&&dist(p,b)<45);if(v&&Math.random()<.03){kill(b,v);if(over)return}}
+  if(!b.imp){const body=bodies.find(x=>dist(x,b)<70);if(body&&Math.random()<.03){meeting();return}}}
+ const nb=bodies.some(b=>dist(b,pl)<70);$('rep').classList.toggle('on',nb);
+ const ac=$('act');
+ if(pl.imp){ac.textContent=cd>0?Math.ceil(cd)+'с':'УБИТЬ';ac.className='btn'+(cd<=0&&P.some(p=>p.alive&&p!=pl&&dist(p,pl)<55)?' on':'')}
+ else{ac.textContent=doing>0?'...':'ЗАДАНИЕ';ac.className='btn task'+(nearTask()>=0?' on':'')}
+ $('fill').style.width=prog/NEED*100+'%';$('alive').textContent='Живы: '+aliveList().length;
+}
+function body(x,y,c,dead,name,self){
+ ctx.save();ctx.translate(x,y);
+ if(dead){ctx.fillStyle=c;ctx.beginPath();ctx.ellipse(0,4,16,8,0,Math.PI,0);ctx.fill();ctx.fillStyle='#eee';ctx.fillRect(-3,-4,6,8);ctx.restore();return}
+ ctx.fillStyle='#0006';ctx.beginPath();ctx.ellipse(0,15,13,5,0,0,7);ctx.fill();
+ ctx.fillStyle=c;ctx.beginPath();ctx.roundRect(-13,-17,26,32,10);ctx.fill();
+ ctx.fillStyle='#a9e5ff';ctx.beginPath();ctx.roundRect(-3,-11,15,10,5);ctx.fill();
+ ctx.fillStyle='#fff';ctx.font='11px system-ui';ctx.textAlign='center';ctx.fillStyle=self?'#ffe27a':'#fff';ctx.fillText(name,0,-22);ctx.restore()}
+function draw(){
+ const d=devicePixelRatio||1,vw=cv.width/d,vh=cv.height/d;ctx.setTransform(d,0,0,d,0,0);ctx.fillStyle='#0d1018';ctx.fillRect(0,0,vw,vh);
+ const cx=Math.max(Math.min(pl.x,W-vw/2),vw/2),cy=Math.max(Math.min(pl.y,H-vh/2),vh/2);
+ ctx.translate(vw/2-(W>vw?cx:W/2),vh/2-(H>vh?cy:H/2));
+ ctx.fillStyle='#1b2236';ctx.fillRect(0,0,W,H);
+ ctx.fillStyle='#2e3a5c';WALLS.forEach(w=>ctx.fillRect(...w));
+ TASKS.forEach((t,i)=>{ctx.fillStyle=done.has(i)?'#2a5a3a':'#f0c030';ctx.beginPath();ctx.arc(t[0],t[1],11,0,7);ctx.fill();ctx.fillStyle='#000a';ctx.font='bold 12px system-ui';ctx.textAlign='center';ctx.fillText('!',t[0],t[1]+4)});
+ bodies.forEach(b=>body(b.x,b.y,b.c,1));
+ P.filter(p=>p.alive).forEach(p=>body(p.x,p.y,p.c,0,p.n,p==pl));
+ if(pl.imp)ctx.strokeStyle='#ff6b6b55',ctx.beginPath(),ctx.arc(pl.x,pl.y,55,0,7),ctx.stroke();
+}
+function loop(t){const dt=Math.min(.05,(t-last)/1000);last=t;if(!paused)update(dt);draw();requestAnimationFrame(loop)}
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=1;keys[e.key]=1;if(e.key==' ')act();if(e.key=='r')$('rep').onpointerdown()});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=0;keys[e.key]=0});
+const joy=$('joy'),st=$('stick'),kn=$('knob');let o=null;
+joy.onpointerdown=e=>{o={x:e.clientX,y:e.clientY};st.style.display='block';st.style.left=o.x+'px';st.style.top=o.y+'px';joy.setPointerCapture(e.pointerId)};
+joy.onpointermove=e=>{if(!o)return;let dx=e.clientX-o.x,dy=e.clientY-o.y;const l=Math.hypot(dx,dy),m=50;if(l>m){dx*=m/l;dy*=m/l}jx=dx/m;jy=dy/m;kn.style.left=35+dx+'px';kn.style.top=35+dy+'px'};
+joy.onpointerup=joy.onpointercancel=()=>{o=null;jx=jy=0;st.style.display='none';kn.style.left=kn.style.top='35px'};
+start();requestAnimationFrame(loop);
+</script></body></html>
